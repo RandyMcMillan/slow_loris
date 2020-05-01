@@ -3,13 +3,13 @@ use std::net::{IpAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{sleep, spawn};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use console::Term;
+use ctrlc;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
-use ctrlc;
 
 fn main() {
     let args = parse_args();
@@ -25,30 +25,42 @@ fn main() {
     let mut rng = thread_rng();
     let thread_counter = Arc::new(AtomicU64::new(0));
     let connection_counter = Arc::new(AtomicU64::new(0));
+    // (total_response_time, total_responses)
+    // total responses needs to be one to not divide by 0. This will average out over time
+    let response_time = Arc::new((AtomicU64::new(0), AtomicU64::new(1)));
+
     let connection_bar = ProgressBar::new(connections)
         .with_style(ProgressStyle::default_bar()
-            .template("{prefix} {wide_bar} {pos}/{len}"));
-    connection_bar.set_prefix("Sending connections");
+            .template("Average response time: {msg} ms\nSending connections: {pos}/{len}\n{wide_bar}"));
+
     Term::stdout().hide_cursor().unwrap_or_else(|_| println!("Could not hide cursor"));
+    Term::stdout().clear_screen().unwrap_or_else(|_| println!("\n\n"));
 
     ctrlc::set_handler(|| std::process::exit(0))
         .expect("Could not change ctrl-c behaviour");
 
     loop {
         let current_connections = connection_counter.load(Ordering::Relaxed);
+        let time: u64 = response_time.0.load(Ordering::Relaxed);
+        let responses: u64 = response_time.1.load(Ordering::Relaxed);
+        let average_response_time = (time/responses).to_string();
         let current_threads = thread_counter.load(Ordering::Relaxed);
-        connection_bar.set_position(current_connections);
 
-        if  current_threads < connections {
+        connection_bar.set_position(current_connections);
+        connection_bar.set_message(&average_response_time);
+
+        if current_threads < connections {
             let thread_counter = Arc::clone(&thread_counter);
             let connection_counter = Arc::clone(&connection_counter);
+            let average_time = Arc::clone(&response_time);
+
             let time_out = rng.gen_range(time_out_min, time_out_max);
             let body_length = rng.gen_range(body_length_min, body_length_max);
             let host = host.clone();
 
+            thread_counter.fetch_add(1, Ordering::Relaxed);
             spawn(move || {
-                thread_counter.fetch_add(1, Ordering::Relaxed);
-                new_socket(connection_counter, &host, ip, 443, time_out, body_length);
+                new_socket(connection_counter, average_time, &host, ip, 443, time_out, body_length);
                 thread_counter.fetch_sub(1, Ordering::Relaxed);
             });
         }
@@ -179,10 +191,17 @@ fn parse_range(string: &str) -> Result<(u64, u64), ()> {
     }
 }
 
-fn new_socket(counter: Arc<AtomicU64>, host: &str, ip: IpAddr, port: u16, time_out: u64, body_length: usize) {
+fn new_socket(counter: Arc<AtomicU64>, average_time: Arc<(AtomicU64, AtomicU64)>, host: &str, ip: IpAddr, port: u16, time_out: u64, body_length: usize) {
+    let start = Instant::now();
+
     let mut connection = match TcpStream::connect((ip, port)) {
         Ok(connection) => {
+            let time = Instant::now().duration_since(start).as_millis() as u64;
+
             counter.fetch_add(1, Ordering::Relaxed);
+            average_time.0.fetch_add(time, Ordering::Relaxed);
+            average_time.1.fetch_add(1, Ordering::Relaxed);
+
             connection
         }
         Err(_) => return
