@@ -397,5 +397,6 @@ fn cli_www_google_com() {
     cmd.assert()
        .success()
        .stdout(predicates::str::starts_with(""));
+}
 
 
