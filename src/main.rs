@@ -383,12 +383,19 @@ fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
 //use assert_cmd::Command;
 
 #[test]
-fn test_your_cli() {
+fn cli_version() {
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     cmd.arg("--version");
     cmd.assert()
        .success()
        .stdout(predicates::str::starts_with("Slow"));
 }
+#[test]
+fn cli_www_google_com() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    cmd.arg("www.google.com");
+    cmd.assert()
+       .success()
+       .stdout(predicates::str::starts_with("
 
 
