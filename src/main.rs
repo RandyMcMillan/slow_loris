@@ -346,7 +346,7 @@ use predicates::prelude::*;
 
 #[test]
 fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("app")?; // Assuming your binary is named "app"
+    let mut cmd = Command::cargo_bin("slow_loris")?; // Assuming your binary is named "app"
 
     cmd.assert()
         .success()
@@ -357,7 +357,7 @@ fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("app")?;
+    let mut cmd = Command::cargo_bin("slow_loris")?;
     cmd.arg("test_argument");
 
     cmd.assert()
@@ -369,7 +369,7 @@ fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("app")?;
+    let mut cmd = Command::cargo_bin("slow_loris")?;
     cmd.arg("--invalid-option"); // Example of an argument that might cause an error
 
     cmd.assert()
