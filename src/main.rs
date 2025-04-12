@@ -390,10 +390,17 @@ fn cli_version() {
        .success()
        .stdout(predicates::str::starts_with("Slow"));
 }
+
+ //* 142.251.175.139
+ //* 142.251.175.100
+ //* 142.251.175.101
+ //* 142.251.175.113
+ //* 142.251.175.138
+ //* 142.251.175.102
 #[test]
 fn cli_www_google_com() {
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
-    cmd.arg("www.google.com");
+    cmd.arg("142.251.185.139");
     cmd.assert()
        .success()
        .stdout(predicates::str::starts_with(""));
