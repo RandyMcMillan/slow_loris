@@ -380,4 +380,15 @@ fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+//use assert_cmd::Command;
+
+#[test]
+fn test_your_cli() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    cmd.arg("--version");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::starts_with(env!("CARGO_PKG_VERSION")));
+}
+
 
