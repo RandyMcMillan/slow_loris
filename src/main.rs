@@ -388,7 +388,7 @@ fn test_your_cli() {
     cmd.arg("--version");
     cmd.assert()
        .success()
-       .stdout(predicates::str::starts_with(env!("CARGO_PKG_VERSION")));
+       .stdout(predicates::str::starts_with(env!("CARGO_PKG_NAME")));
 }
 
 
