@@ -340,4 +340,42 @@ fn rand_string(length: usize) -> String {
         .collect::<String>()
 }
 
+use std::process::Command;
+use assert_cmd::prelude::*;
+use predicates::prelude::*;
+
+#[test]
+fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("app")?; // Assuming your binary is named "app"
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Hello, world!")); // Replace with your app's expected output
+
+    Ok(())
+}
+
+#[test]
+fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("app")?;
+    cmd.arg("test_argument");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Received argument: test_argument")); // Adjust based on your app's logic
+
+    Ok(())
+}
+
+#[test]
+fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("app")?;
+    cmd.arg("--invalid-option"); // Example of an argument that might cause an error
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("error:")); // Adjust based on your app's error message
+
+    Ok(())
+}
 
