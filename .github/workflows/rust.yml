@@ -19,7 +19,7 @@ jobs:
     - name: Build/Install
       run: cargo b && cargo install --path .
     - run: |
-        slow_loris &
+        slow_loris example.com &
     - run: pkill -f slow_loris;
     - name: Run tests
       run: cargo test --verbose
