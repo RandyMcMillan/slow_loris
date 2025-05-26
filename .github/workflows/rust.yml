@@ -18,5 +18,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build/Install
       run: cargo b && cargo install --path .
+    - run: |
+        slow_loris &
+    - run: pkill -f slow_loris;
     - name: Run tests
       run: cargo test --verbose
