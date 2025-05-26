@@ -22,4 +22,4 @@ jobs:
         slow_loris 23.54.155.142 &
     - run: pkill -f slow_loris;
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose -- 23.54.155.142 --timeout 60
