@@ -60,6 +60,10 @@ impl Attrs {
 fn main() {
     // set the important application variables and states
     let args = Arc::new(parse_args());
+    //let host = args.host.clone();
+    //println!("args:{:?}", args);
+    //println!("host:{:?}", args.host);
+    //println!("ip:{:?}", args.ip);
     let attrs = Arc::new(Mutex::new(Attrs::new()));
 
     // create a progress bar
@@ -77,13 +81,19 @@ fn main() {
     ));
 
     // Hide the console cursor and clear the screen
+    //#[cfg(not(test))]
     Term::stdout().hide_cursor().unwrap_or_else(|_| {});
+    //#[cfg(not(test))]
     Term::stdout()
         .clear_screen()
         .unwrap_or_else(|_| println!("\n\n"));
 
     // change the Ctrl+C behaviour to just exit the process
     ctrlc::set_handler(|| std::process::exit(0)).expect("Could not change ctrl-c behaviour");
+    println!("host:{}", args.host);
+    println!("ip:{:?}", args.ip);
+    println!("body_length_min:{:?}", args.body_length_min);
+    println!("body_length_max:{:?}", args.body_length_max);
 
     // it's necessary to create a new thread so the progress-bars are displayed correctly
     spawn(move || {
@@ -100,6 +110,8 @@ fn main() {
                     ((attrs.total_responses as f64 / attrs.total_requests as f64) * 100.0) as u64;
                 current_connections = attrs.current_connections;
                 current_threads = attrs.current_threads;
+                //#[cfg(test)]
+                //println!("current_threads:{:?}", current_threads);
             }
 
             // update the progress bar
@@ -109,9 +121,9 @@ fn main() {
 
             // spawn a new thread if not enough connections exists
             if current_threads < args.max_connections {
-                println!("args={:?}", args);
-                println!("attrs={:?}", attrs);
-                println!("args.port={:?}", args.port);
+                //println!("args={:?}", args);
+                //println!("attrs={:?}", attrs);
+                //println!("args.port={:?}", args.port);
                 let args = Arc::clone(&args);
                 let attrs = Arc::clone(&attrs);
                 let port = args.port;
@@ -123,6 +135,7 @@ fn main() {
                 }
 
                 spawn(move || {
+                    //#[cfg(not(test))]
                     new_socket(args, attrs, port);
                 });
             }
@@ -322,17 +335,21 @@ fn new_socket(args: Arc<Args>, attrs: Arc<Mutex<Attrs>>, port: u16) {
 
     let mut attrs = attrs.lock().unwrap();
     attrs.current_connections -= 1;
+    //#[cfg(test)]
+    println!("{:?}", attrs.current_connections -= 1);
     attrs.current_threads -= 1;
+    //#[cfg(test)]
+    println!("{:?}", attrs.current_threads -= 1);
 }
 
 /// creates a http request from a http header and a http body
 fn http_request(host: &str, body_length: usize) -> String {
-    #[cfg(test)]
-    println!(
-        "{}{}",
-        http_header(host, body_length),
-        http_body(body_length)
-    );
+    ////#[cfg(test)]
+    //println!(
+    //    "host:{}\nbody_length:{}",
+    //    http_header(host, body_length),
+    //    http_body(body_length)
+    //);
     format!(
         "{}{}",
         http_header(host, body_length),
@@ -383,8 +400,8 @@ fn http_body(length: usize) -> String {
         string.push_str(&rand_string(last));
     }
     string.push_str(&rand_string(rest));
-    #[cfg(test)]
-    println!("{}", string);
+    //#[cfg(test)]
+    //println!("{}", string);
 
     string
 }
@@ -400,7 +417,7 @@ fn rand_string(length: usize) -> String {
 #[test]
 fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
     use assert_cmd::Command;
-    use predicates::prelude::*;
+    //use predicates::prelude::*;
     let ips = [
         "142.251.175.100",
         "142.251.175.101",
@@ -410,7 +427,7 @@ fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
         "142.251.175.139",
     ];
     for ip in ips {
-        println!("testing:{}", ip);
+        println!("test_app_no_arguments:testing:{}", ip);
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
         cmd.args([ip, "-h"]);
         cmd.assert()
@@ -423,7 +440,7 @@ fn test_app_no_arguments() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
     use assert_cmd::Command;
-    use predicates::prelude::*;
+    //use predicates::prelude::*;
     //cmd.arg("test_argument");
     let ips = [
         "142.251.175.100",
@@ -434,9 +451,9 @@ fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
         "142.251.175.139",
     ];
     for ip in ips {
-        println!("testing:{}", ip);
+        println!("test_app_with_argument:testing:{}", ip);
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
-        cmd.arg(ip);
+        cmd.args([ip]);
         cmd.assert()
             .success()
             .stdout(predicates::str::starts_with(""));
@@ -448,26 +465,48 @@ fn test_app_with_argument() -> Result<(), Box<dyn std::error::Error>> {
 fn test_app_exits_with_error() -> Result<(), Box<dyn std::error::Error>> {
     use assert_cmd::Command;
     use predicates::prelude::*;
-    //let mut cmd = Command::cargo_bin("slow_loris")?;
-    //cmd.arg("--invalid-option"); // Example of an argument that might cause an error
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    cmd.arg("--invalid-option"); // Example of an argument that might cause an error
 
-    //cmd.assert()
-    //  .failure()
-    //.  .stderr(predicate::str::contains("error:")); // Adjust based on your app's error message
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("error:")); // Adjust based on your app's error message
 
     Ok(())
 }
 //use assert_cmd::Command;
 
 #[test]
-fn cli_version() {
+fn test_version() {
     use assert_cmd::Command;
-    use predicates::prelude::*;
+    //use predicates::prelude::*;
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     cmd.arg("--version");
     cmd.assert()
         .success()
         .stdout(predicates::str::starts_with("Slow"));
+    cmd.arg("-V");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::starts_with("Slow"));
+
+    let package_version = env!("CARGO_PKG_VERSION");
+
+    println!("The current package version is: {}", package_version);
+
+    // You can also access other Cargo-provided environment variables, such as:
+    // CARGO_PKG_NAME: The name of the package
+    // CARGO_PKG_AUTHORS: The authors of the package
+    // CARGO_PKG_DESCRIPTION: The description of the package
+    // CARGO_PKG_HOMEPAGE: The homepage URL of the package
+
+    let package_name = env!("CARGO_PKG_NAME");
+    let package_authors = env!("CARGO_PKG_AUTHORS");
+    let package_description = env!("CARGO_PKG_DESCRIPTION");
+
+    println!("Package Name: {}", package_name);
+    println!("Package Authors: {}", package_authors);
+    println!("Package Description: {}", package_description);
 }
 
 //* 142.251.175.139
@@ -476,28 +515,23 @@ fn cli_version() {
 //* 142.251.175.113
 //* 142.251.175.138
 //* 142.251.175.102
-#[test]
-fn cli_www_google_com() {
-    use assert_cmd::Command;
-    use predicates::prelude::*;
-    let ips = [
-        "142.251.175.100",
-        "142.251.175.101",
-        "142.251.175.102",
-        "142.251.175.113",
-        "142.251.175.138",
-        "142.251.175.139",
-    ];
-    for ip in ips {
-        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
-        cmd.arg(ip);
-        cmd.assert()
-            .success()
-            .stdout(predicates::str::starts_with(""));
-    }
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
-    cmd.arg("142.251.185.139");
-    cmd.assert()
-        .success()
-        .stdout(predicates::str::starts_with(""));
-}
+//#[test]
+//fn cli_www_google_com() {
+//    use assert_cmd::Command;
+//    use predicates::prelude::*;
+//    let ips = [
+//        "142.251.175.100",
+//        "142.251.175.101",
+//        "142.251.175.102",
+//        "142.251.175.113",
+//        "142.251.175.138",
+//        "142.251.175.139",
+//    ];
+//    for ip in ips {
+//        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+//        cmd.arg(ip);
+//        cmd.assert()
+//            .success()
+//            .stdout(predicates::str::starts_with(""));
+//    }
+//}
