@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build/Install
-      run: cargo b && cargo install --path .
+      run: cargo b -vv && cargo install --path . -vv
     - run: |
         slow_loris 23.54.155.142 &
     - run: pkill -f slow_loris;
