@@ -10,6 +10,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration as StdDuration;
 
+use dns_lookup::lookup_addr;
+use dns_lookup::lookup_host;
+
+// # IP addresses
+// alias ip="dig +short myip.opendns.com @resolver1.opendns.com"
+// alias localip="ipconfig getifaddr en0"
+// alias ips="ifconfig -a | grep -o 'inet6\? \(addr:\)\?\s\?\(\(\([0-9]\+\.\)\{3\}[0-9]\+\)\|[a-fA-F0-9:]\+\)' | awk '{ sub(/inet6? (addr:)? ?/, \"\"); print }'"
+//
+
 #[derive(Debug)]
 struct Args {
     host: String,
@@ -57,6 +66,38 @@ impl Attrs {
     }
 }
 
+fn get_my_ip() -> Result<String, Box<dyn std::error::Error>> {
+    use std::io;
+    use std::process::Command;
+
+    let output = Command::new("dig")
+        .arg("+short")
+        .arg("myip.opendns.com")
+        .arg("@resolver1.opendns.com")
+        .output()?;
+
+    if output.status.success() {
+        let ip_address = String::from_utf8_lossy(&output.stdout);
+        Ok(String::from(format!("{}", ip_address.trim())))
+    } else {
+        // Convert stderr to a String
+        match str::from_utf8(&output.stderr) {
+            Ok(error_string) => {
+                eprintln!("Error executing dig command: {}", error_string.trim());
+                Ok(String::from(format!(
+                    "Raw stderr: {:?}",
+                    error_string.trim()
+                )))
+            }
+            Err(e) => {
+                eprintln!("Error converting stderr to String: {:?}", e);
+                eprintln!("Raw stderr: {:?}", output.stderr);
+                Ok(String::from(format!("Raw stderr: {:?}", output.stderr)))
+            }
+        }
+    }
+}
+
 fn main() {
     // set the important application variables and states
     let args = Arc::new(parse_args());
@@ -82,11 +123,11 @@ fn main() {
 
     // Hide the console cursor and clear the screen
     //#[cfg(not(test))]
-    Term::stdout().hide_cursor().unwrap_or_else(|_| {});
+    //Term::stdout().hide_cursor().unwrap_or_else(|_| {});
     //#[cfg(not(test))]
-    Term::stdout()
-        .clear_screen()
-        .unwrap_or_else(|_| println!("\n\n"));
+    //Term::stdout()
+    //    .clear_screen()
+    //    .unwrap_or_else(|_| println!("\n\n"));
 
     // change the Ctrl+C behaviour to just exit the process
     ctrlc::set_handler(|| std::process::exit(0)).expect("Could not change ctrl-c behaviour");
@@ -168,9 +209,17 @@ fn parse_args() -> Args {
         .version(clap::crate_version!())
         .arg(
             Arg::with_name("address")
-                .help("The address of the server\nCan either be an ip or a domain")
+                .help("The ip address of the server.")
                 .takes_value(true)
+                .default_value("127.0.0.1")
                 .required(true),
+        )
+        .arg(
+            Arg::with_name("domain")
+                .help("The domain of the server")
+                .takes_value(true)
+                .default_value("www.google.com")
+                .required(false),
         )
         .arg(
             Arg::with_name("connections")
@@ -228,27 +277,60 @@ fn parse_args() -> Args {
         )
         .get_matches();
 
-    let host;
-    let ip;
-    let address = matches.value_of("address").unwrap();
-    match address.parse::<IpAddr>() {
-        Ok(parsed) => {
-            host = lookup_addr(&parsed).expect("Could not find hostname for given ip");
-            ip = parsed;
-        }
-        Err(_) => {
-            host = address.to_string();
-            ip = match lookup_host(address) {
-                Ok(ips) if ips.len() == 1 => ips[0],
-                _ => panic!("Could not find ip for given domain"),
-            }
-        }
-    }
     let port = matches.value_of("port").unwrap().parse().unwrap();
     let max_connections = matches.value_of("connections").unwrap().parse().unwrap();
     let (timeout_min, timeout_max) = parse_range(matches.value_of("timeout").unwrap()).unwrap();
     let body_length = parse_range(matches.value_of("body_length").unwrap()).unwrap();
     let (body_length_min, body_length_max) = (body_length.0 as usize, body_length.1 as usize);
+
+    use dns_lookup::getnameinfo;
+    use std::net::{IpAddr, SocketAddr};
+    let host;
+    //let ip;
+    let mut ip: IpAddr = "127.0.0.1".parse().unwrap();
+    //let port = args.port;
+    let address = matches.value_of("address").unwrap();
+    println!("address:{}", address);
+    match address.parse::<IpAddr>() {
+        Ok(parsed) => {
+            host = dns_lookup::lookup_addr(&parsed).expect("Could not find hostname for given ip");
+            ip = parsed;
+        }
+        Err(_) => {
+            host = address.to_string();
+            println!("host={}", host);
+
+            //let hostname = "localhost";
+            //let ips: Vec<std::net::IpAddr> = lookup_host(hostname).unwrap();
+            //            let socket: SocketAddr = (host, 0).into();
+
+            //let mut ip: IpAddr = "127.0.0.1".parse().unwrap();
+            let socket: SocketAddr = (ip, port).into();
+
+            //			host = getnameinfo(&socket, 0).unwrap();
+
+            let (name, service) = match getnameinfo(&socket, 0) {
+                Ok((n, s)) => (n, s),
+                Err(e) => panic!("Failed to lookup socket {:?}", e),
+            };
+
+            println!("name={}", name);
+            println!("service={}", service);
+
+            let ips: Vec<std::net::IpAddr> =
+                lookup_host(&host).unwrap_or(vec!["192.168.1.1".parse().unwrap()]);
+            //assert!(ips.contains(&"127.0.0.1".parse().unwrap()));
+            //assert!(ips.contains(&"127.0.0.1".parse().unwrap()));
+
+            //ip = match lookup_host(address) {
+            //ip = match lookup_host(hostname) {
+            ip = match lookup_host(&host) {
+                Ok(ips) if ips.len() == 1 => ips[0],
+                Ok(ips) if ips.len() == 2 => ips[1],
+                _ => ips[0], //panic!("Could not find ip for given domain"),
+            }
+        }
+    }
 
     Args {
         host,
